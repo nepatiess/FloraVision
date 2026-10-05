@@ -13,3 +13,6 @@ models/*.pth
 
 # VS Code
 .vscode/
+
+#test_images
+test_images/*
