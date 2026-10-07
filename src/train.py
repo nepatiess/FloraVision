@@ -1,3 +1,4 @@
+from collections import Counter
 from pathlib import Path
 
 import torch
@@ -11,10 +12,12 @@ DATASET_DIR = PROJECT_ROOT / "data" / "flowers_13"
 MODEL_DIR = PROJECT_ROOT / "models"
 
 BATCH_SIZE = 32
-EPOCHS = 10
-LEARNING_RATE = 0.001
+EPOCHS = 15
+LEARNING_RATE = 0.0001
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE = torch.device(
+    "cuda" if torch.cuda.is_available() else "cpu"
+)
 
 
 # -------------------------
@@ -22,9 +25,26 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # -------------------------
 
 train_transform = transforms.Compose([
-    transforms.RandomResizedCrop(224),
+    transforms.RandomResizedCrop(
+        224,
+        scale=(0.7, 1.0)
+    ),
+
     transforms.RandomHorizontalFlip(),
-    transforms.RandomRotation(15),
+
+    transforms.RandomRotation(20),
+
+    transforms.ColorJitter(
+        brightness=0.2,
+        contrast=0.2,
+        saturation=0.2,
+        hue=0.05
+    ),
+
+    transforms.RandomPerspective(
+        distortion_scale=0.15,
+        p=0.2
+    ),
 
     transforms.ToTensor(),
 
@@ -78,6 +98,36 @@ validation_loader = DataLoader(
 
 
 # -------------------------
+# Class Weights
+# -------------------------
+
+# Eğitim verisindeki sınıf dağılımını hesaplıyoruz.
+# Az fotoğrafı bulunan sınıfların hatalarına
+# loss hesabında daha fazla ağırlık veriyoruz.
+
+class_counts = Counter(train_dataset.targets)
+
+class_weights = []
+
+for class_index in range(
+    len(train_dataset.classes)
+):
+    count = class_counts[class_index]
+
+    weight = len(train_dataset) / (
+        len(train_dataset.classes) * count
+    )
+
+    class_weights.append(weight)
+
+
+class_weights = torch.tensor(
+    class_weights,
+    dtype=torch.float32
+).to(DEVICE)
+
+
+# -------------------------
 # Model
 # -------------------------
 
@@ -86,7 +136,8 @@ weights = models.ResNet18_Weights.DEFAULT
 model = models.resnet18(weights=weights)
 
 # ResNet18 normalde 1000 ImageNet sınıfı üretir.
-# Bizim 13 çiçeğimiz olduğu için son katmanı değiştiriyoruz.
+# Bizim 13 çiçeğimiz olduğu için
+# son katmanı değiştiriyoruz.
 
 model.fc = nn.Linear(
     model.fc.in_features,
@@ -100,7 +151,9 @@ model = model.to(DEVICE)
 # Loss & Optimizer
 # -------------------------
 
-criterion = nn.CrossEntropyLoss()
+criterion = nn.CrossEntropyLoss(
+    weight=class_weights
+)
 
 optimizer = torch.optim.Adam(
     model.parameters(),
@@ -120,12 +173,26 @@ print(f"\nDevice: {DEVICE}")
 print(f"Classes: {len(train_dataset.classes)}")
 print(f"Train images: {len(train_dataset)}")
 print(f"Validation images: {len(validation_dataset)}")
+
+print("\nClass Weights:")
+
+for class_name, weight in zip(
+    train_dataset.classes,
+    class_weights
+):
+    print(
+        f"{class_name:20} "
+        f"{weight.item():.4f}"
+    )
+
 print()
 
 
 for epoch in range(EPOCHS):
 
+    # -------------------------
     # TRAIN
+    # -------------------------
 
     model.train()
 
@@ -142,7 +209,10 @@ for epoch in range(EPOCHS):
 
         outputs = model(images)
 
-        loss = criterion(outputs, labels)
+        loss = criterion(
+            outputs,
+            labels
+        )
 
         loss.backward()
 
@@ -150,7 +220,10 @@ for epoch in range(EPOCHS):
 
         train_loss += loss.item()
 
-        _, predictions = torch.max(outputs, 1)
+        _, predictions = torch.max(
+            outputs,
+            1
+        )
 
         train_total += labels.size(0)
 
@@ -160,11 +233,15 @@ for epoch in range(EPOCHS):
 
 
     train_accuracy = (
-        100 * train_correct / train_total
+        100
+        * train_correct
+        / train_total
     )
 
 
+    # -------------------------
     # VALIDATION
+    # -------------------------
 
     model.eval()
 
@@ -199,19 +276,33 @@ for epoch in range(EPOCHS):
     )
 
 
+    # -------------------------
+    # Epoch Result
+    # -------------------------
+
     print(
         f"Epoch [{epoch + 1}/{EPOCHS}] "
-        f"Loss: {train_loss / len(train_loader):.4f} | "
-        f"Train Accuracy: {train_accuracy:.2f}% | "
-        f"Validation Accuracy: {validation_accuracy:.2f}%"
+        f"Loss: "
+        f"{train_loss / len(train_loader):.4f} | "
+        f"Train Accuracy: "
+        f"{train_accuracy:.2f}% | "
+        f"Validation Accuracy: "
+        f"{validation_accuracy:.2f}%"
     )
 
 
-    # En iyi modeli kaydet
+    # -------------------------
+    # Save Best Model
+    # -------------------------
 
-    if validation_accuracy > best_validation_accuracy:
+    if (
+        validation_accuracy
+        > best_validation_accuracy
+    ):
 
-        best_validation_accuracy = validation_accuracy
+        best_validation_accuracy = (
+            validation_accuracy
+        )
 
         torch.save(
             model.state_dict(),
@@ -225,6 +316,7 @@ for epoch in range(EPOCHS):
 
 
 print("\nTraining completed.")
+
 print(
     f"Best validation accuracy: "
     f"{best_validation_accuracy:.2f}%"
